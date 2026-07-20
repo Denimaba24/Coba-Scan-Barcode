@@ -591,7 +591,7 @@
       <div id="view-scan" class="view-page active">
         <div class="card">
           <div class="card-header">
-            <i class="fas fa-camera-viewfinder"></i>SCAN BOS KUHHH
+            <i class="fas fa-camera-viewfinder"></i>Jangan Lupa Scan YAHH!
           </div>
           <div class="scanner-wrapper">
             <div class="scanner-container" id="scannerBox">
@@ -964,8 +964,8 @@
 
       // SCANNER STATE
       let isScanning = false;
+      let isProcessing = false; // KUNCI MENCEGAH DOUBLE SCAN SUPER CEPAT
       let currentCam = "environment";
-      let lastErrorTime = 0;
       let isTorchOn = false;
       let streamTrack = null;
       let scanLoopFrame = null;
@@ -991,7 +991,7 @@
       let zxingReader = null;
 
       if (hasNativeScanner && !isIOS) {
-        document.getElementById("engineBadge").innerText = "HW ACCEL"; // Akselerasi Hardware Android (Google Play Services)
+        document.getElementById("engineBadge").innerText = "HW ACCEL";
         nativeDetector = new BarcodeDetector({
           formats: [
             "code_128",
@@ -1097,7 +1097,7 @@
         if (pageId === "view-database") renderDatabase();
       }
 
-      // TOGGLE SCAN - Dioptimasi dengan resolusi Kamera Android terbaik
+      // TOGGLE SCAN
       async function toggleScan() {
         const btn = document.getElementById("btnAction");
         const placeholder = document.getElementById("placeholderMsg");
@@ -1130,6 +1130,7 @@
           btn.classList.remove("stop");
         } else {
           initAudio();
+          isProcessing = false; // Reset kuncian saat mulai
           try {
             video.style.display = "block";
             laser.style.display = "block";
@@ -1142,7 +1143,6 @@
 
             let stream;
             try {
-              // Optimasi untuk Kamera Android Modern (Fokus cepat, Resolusi Tinggi)
               stream = await navigator.mediaDevices.getUserMedia({
                 video: {
                   facingMode: { ideal: currentCam },
@@ -1152,7 +1152,6 @@
                 },
               });
             } catch (e) {
-              // Fallback jika device spesifikasi rendah
               stream = await navigator.mediaDevices.getUserMedia({
                 video: { facingMode: currentCam },
               });
@@ -1344,85 +1343,75 @@
         return null;
       }
 
-      // LOGIKA BARCODE 3 (Sementera / Pola Default)
-      function parseBarcode3(raw) {
-        // Tambahkan aturan pasti untuk membaca data dari angka di Barcode 3 di sini
-        // Saat ini menggunakan placeholder pengecekan jika panjang barcode adalah spesifik
-        if (raw.startsWith("B3") || (raw.length === 15 && /^\d+$/.test(raw))) {
-          return {
-            jenisBarcode: "Barcode 3",
-            panjang: 0,
-            lebar: 0,
-            potongan: 1,
-            persegi: "0.00",
-            golongan: raw.substring(0, 5),
-          };
-        }
-        return null;
-      }
-
-      // PROCESS DETECTED
+      // LOGIKA UTAMA PENDETEKSI BARCODE (PERBAIKAN BUG)
       function processBarcodeDetected(code, format) {
-        code = (code || "").trim();
-        if (!code) return;
+        if (isProcessing) return; // MENCEGAH DOUBLE SCAN KARENA KAMERA TERLALU CEPAT
 
+        code = (code || "").trim();
+        if (code.length < 4) return; // Abaikan pantulan silau / barcode yang terlalu pendek
+
+        // CEK APAKAH BARCODE SUDAH PERNAH DI-SCAN SEBELUMNYA
         if (scannedCodesSet.has(code)) {
-          const now = Date.now();
-          if (now - lastErrorTime > 2000) {
-            triggerErrorFeedback();
-            Swal.fire({
-              title: "DITOLAK!",
-              text: "Barcode ini sudah pernah di-scan.",
-              icon: "error",
-              background: "rgba(15,23,42,0.95)",
-              color: "#fff",
-              confirmButtonColor: "var(--danger)",
-            });
-            lastErrorTime = now;
-          }
+          isProcessing = true; // Kunci sistem sebentar
+          triggerErrorFeedback();
+          Swal.fire({
+            title: "SUDAH DI-SCAN!",
+            text: "Data barcode ini sudah ada di daftar. Geser kamera Anda.",
+            icon: "warning",
+            background: "rgba(15,23,42,0.95)",
+            color: "#fff",
+            timer: 2000,
+            showConfirmButton: false,
+          }).then(() => {
+            isProcessing = false; // Buka kunci setelah popup hilang
+          });
           return;
         }
 
+        isProcessing = true; // Kunci agar frame kamera berikutnya tidak ikut memproses
+
         const b1 = parseBarcode1(code);
         if (b1) {
-          scannedCodesSet.add(code);
-          simpanData(code, format, b1);
+          prosesSukses(code, format, b1);
           return;
         }
 
         const b2 = parseBarcode20Digit(code);
         if (b2) {
-          scannedCodesSet.add(code);
-          simpanData(code, format, b2);
-          return;
-        }
-
-        // PROSES BARCODE 3
-        const b3 = parseBarcode3(code);
-        if (b3) {
-          scannedCodesSet.add(code);
-          simpanData(code, format, b3);
+          prosesSukses(code, format, b2);
           return;
         }
 
         if (masterDB[code]) {
-          scannedCodesSet.add(code);
-          simpanData(code, format, masterDB[code]);
+          prosesSukses(code, format, masterDB[code]);
           return;
         }
 
-        if (code.length >= 8) promptNewMasterData(code, format);
+        // JIKA BARCODE TIDAK DIKENALI (Contoh: BARCODE 3 atau yang lainnya)
+        promptNewMasterData(code, format);
       }
 
+      function prosesSukses(code, format, parsed) {
+        scannedCodesSet.add(code);
+        simpanData(code, format, parsed);
+
+        // BERI JEDA 1.5 DETIK sebelum kamera bisa menscan barcode lain
+        // Ini memberi waktu Anda untuk memindahkan HP dari kertas barcode
+        setTimeout(() => {
+          isProcessing = false;
+        }, 1500);
+      }
+
+      // FORM PENAMBAHAN DATA BARU UNIVERSAL
       function promptNewMasterData(code, format) {
-        if (isScanning) toggleScan();
+        if (isScanning) toggleScan(); // Matikan kamera sementara agar aman
         Swal.fire({
           title: "Master Data Baru!",
-          html: `<div style="font-size:0.85rem;color:#a78bfa;margin-bottom:15px;text-align:left;">Barcode belum dikenali:<br><b style="color:white;">${code}</b><br><br>Sistem akan mengingatnya selamanya.</div>
+          html: `<div style="font-size:0.85rem;color:#a78bfa;margin-bottom:15px;text-align:left;">Barcode baru terdeteksi:<br><b style="color:white;">${code}</b><br><br>Mohon tentukan ini Barcode ke berapa dan ukurannya. Sistem akan mengingatnya secara otomatis untuk scan berikutnya!</div>
     <select id="m-jenis" class="swal2-input" style="width:90%;font-size:14px;margin-bottom:8px;">
+      <option value="Barcode 3">Barcode 3 (Format Baru)</option>
       <option value="Barcode 1">Barcode 1</option>
       <option value="Barcode 2">Barcode 2</option>
-      <option value="Barcode 3">Barcode 3</option>
     </select>
     <input id="m-gol" class="swal2-input" placeholder="Golongan (Cth: FFP)" style="width:90%;font-size:14px;margin-bottom:8px;">
     <input id="m-p" type="number" class="swal2-input" placeholder="Panjang (Cth: 300)" style="width:90%;font-size:14px;margin-bottom:8px;">
@@ -1431,7 +1420,7 @@
           background: "rgba(15,23,42,0.95)",
           color: "#fff",
           showCancelButton: true,
-          confirmButtonText: '<i class="fas fa-save"></i> Simpan',
+          confirmButtonText: '<i class="fas fa-save"></i> Simpan & Lanjut Scan',
           cancelButtonText: "Batal",
           confirmButtonColor: "var(--success)",
           preConfirm: () => {
@@ -1460,8 +1449,15 @@
             scannedCodesSet.add(code);
             simpanData(code, format, res.value);
           }
-          if (document.getElementById("view-scan").classList.contains("active"))
+
+          isProcessing = false; // Buka kuncian setelah proses selesai
+
+          // Nyalakan kamera kembali jika masih di halaman scan
+          if (
+            document.getElementById("view-scan").classList.contains("active")
+          ) {
             setTimeout(toggleScan, 500);
+          }
         });
       }
 
@@ -1471,7 +1467,13 @@
         if (!val) return Toast.fire({ icon: "error", title: "Kode kosong!" });
         if (scannedCodesSet.has(val)) {
           triggerErrorFeedback();
-          return Swal.fire("Ditolak!", "Barcode ini sudah ada.", "error");
+          return Swal.fire({
+            title: "SUDAH DI-SCAN!",
+            text: "Barcode ini sudah ada di daftar.",
+            icon: "error",
+            background: "rgba(15,23,42,0.95)",
+            color: "#fff",
+          });
         }
         processBarcodeDetected(val, "MANUAL");
         document.getElementById("manualData").value = "";
@@ -1579,7 +1581,7 @@
         });
       }
 
-      // RENDERING TABLES (Termasuk Barcode 3)
+      // RENDERING TABLES
       function renderToday() {
         const todayStr = new Date().toISOString().split("T")[0];
         const listToday = allData.filter((i) => i.tanggal === todayStr);
@@ -1658,7 +1660,7 @@
         });
       }
 
-      // EXPORT EXCEL & PDF (Termasuk Barcode 3)
+      // EXPORT EXCEL & PDF
       function downloadExcelHarian() {
         const todayStr = new Date().toISOString().split("T")[0];
         exportExcel(
@@ -1698,7 +1700,6 @@
               Jam: item.jam,
             }));
 
-          // Jangan buat sheet kalau kosong agar file rapi
           if (rows.length > 0) {
             const ws = XLSX.utils.json_to_sheet(rows);
             XLSX.utils.book_append_sheet(wb, ws, type);
@@ -1788,13 +1789,14 @@
         doc.save(filename);
       }
 
-      // FITUR WHATSAPP SHARE (Termasuk Barcode 3)
+      // FITUR WHATSAPP SHARE
       function shareWAHariIni() {
         const todayStr = new Date().toISOString().split("T")[0];
         const listToday = allData.filter((i) => i.tanggal === todayStr);
         kirimKeWA(
           listToday,
-          `*LAPORAN SCAN HARIAN - PT. DAYA SAKTI NIAGA*\nTanggal: ${todayStr}`,
+          `*LAPORAN SCAN HARIAN - PT. DAYA SAKTI NIAGA*
+Tanggal: ${todayStr}`,
         );
       }
 
@@ -1812,30 +1814,42 @@
             title: "Tidak ada data untuk dibagikan!",
           });
 
-        let text = `${judulHeader}\nTotal Item: ${dataset.length} Scan\n----------------------------------\n`;
+        let text = `${judulHeader}
+Total Item: ${dataset.length} Scan
+----------------------------------
+`;
 
         const b1 = dataset.filter((i) => i.jenisBarcode === "Barcode 1");
         const b2 = dataset.filter((i) => i.jenisBarcode === "Barcode 2");
         const b3 = dataset.filter((i) => i.jenisBarcode === "Barcode 3");
 
         if (b1.length > 0) {
-          text += `\n*BARCODE 1 (${b1.length} item)*\n`;
+          text += `
+*BARCODE 1 (${b1.length} item)*
+`;
           b1.forEach((item, idx) => {
-            text += `${idx + 1}. *${item.kode}* | Gol: ${item.golongan} | P:${item.panjang} L:${item.lebar} Pot:${item.potongan} (${item.persegi} m²)\n`;
+            text += `${idx + 1}. *${item.kode}* | Gol: ${item.golongan} | P:${item.panjang} L:${item.lebar} Pot:${item.potongan} (${item.persegi} m²)
+`;
           });
         }
 
         if (b2.length > 0) {
-          text += `\n*BARCODE 2 (${b2.length} item)*\n`;
+          text += `
+*BARCODE 2 (${b2.length} item)*
+`;
           b2.forEach((item, idx) => {
-            text += `${idx + 1}. *${item.kode}* | Gol: ${item.golongan} | P:${item.panjang} L:${item.lebar} Pcs:${item.potongan} (${item.persegi} m²)\n`;
+            text += `${idx + 1}. *${item.kode}* | Gol: ${item.golongan} | P:${item.panjang} L:${item.lebar} Pcs:${item.potongan} (${item.persegi} m²)
+`;
           });
         }
 
         if (b3.length > 0) {
-          text += `\n*BARCODE 3 (${b3.length} item)*\n`;
+          text += `
+*BARCODE 3 (${b3.length} item)*
+`;
           b3.forEach((item, idx) => {
-            text += `${idx + 1}. *${item.kode}* | Gol: ${item.golongan} | P:${item.panjang} L:${item.lebar} Pcs:${item.potongan} (${item.persegi} m²)\n`;
+            text += `${idx + 1}. *${item.kode}* | Gol: ${item.golongan} | P:${item.panjang} L:${item.lebar} Pcs:${item.potongan} (${item.persegi} m²)
+`;
           });
         }
 
@@ -1854,4 +1868,3 @@
     </script>
   </body>
 </html>
-
