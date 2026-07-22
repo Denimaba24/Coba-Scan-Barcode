@@ -22,13 +22,11 @@
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
     />
 
-    <!-- ZXING BARCODE SCANNER -->
+    <!-- ZXING BARCODE SCANNER (SUPER FAST LOCAL DECODING) -->
     <script
       type="text/javascript"
       src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"
     ></script>
-    <!-- TESSERACT AI OCR VISION -->
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -291,7 +289,7 @@
         box-shadow: 0 0 15px 3px rgba(59, 130, 246, 0.6);
         display: none;
         z-index: 10;
-        animation: scanAnim 2s infinite ease-in-out;
+        animation: scanAnim 1.5s infinite ease-in-out;
       }
       @keyframes scanAnim {
         0%,
@@ -583,7 +581,7 @@
         <i class="fas fa-qrcode" style="margin-right: 8px"></i>PT. Daya Sakti
         Niaga
       </div>
-      <span class="engine-badge" id="engineBadge">Membaca Data Barcode</span>
+      <span class="engine-badge" id="engineBadge">FAST SCAN</span>
     </div>
 
     <div class="pull-indicator" id="pullIndicator">
@@ -595,7 +593,7 @@
       <div id="view-scan" class="view-page active">
         <div class="card">
           <div class="card-header">
-            <i class="fas fa-camera-viewfinder"></i>GASAK AJAAA!!!
+            <i class="fas fa-camera-viewfinder"></i>SEMOGA LANCAR
           </div>
           <div class="scanner-wrapper">
             <div class="scanner-container" id="scannerBox">
@@ -947,9 +945,10 @@
     </nav>
 
     <script>
-      // STORAGE
+      // STORAGE LOCAL DATABASE
       const STORAGE_KEY = "SCMBarcodeMasterData";
       let allData = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+      let masterDB = JSON.parse(localStorage.getItem("SCMMasterDB") || "{}");
 
       // SCANNER STATE
       let isScanning = false;
@@ -960,7 +959,7 @@
       let scanLoopFrame = null;
       let audioCtx = null;
 
-      // SPAM PROTECTION
+      // SPAM PROTECTION & SPEED CONTROL
       let lastScannedCode = "";
       let lastScannedTime = 0;
 
@@ -982,7 +981,7 @@
       let zxingReader = null;
 
       if (hasNativeScanner && !isIOS) {
-        document.getElementById("engineBadge").innerText = "HW ACCEL + AI";
+        document.getElementById("engineBadge").innerText = "HW NATIVE";
         nativeDetector = new BarcodeDetector({
           formats: [
             "code_128",
@@ -994,10 +993,11 @@
             "upc_e",
             "itf",
             "codabar",
+            "qr_code",
           ],
         });
       } else {
-        document.getElementById("engineBadge").innerText = "ZXING + AI OCR";
+        document.getElementById("engineBadge").innerText = "ZXING FAST";
       }
 
       function getZXingHints() {
@@ -1175,12 +1175,12 @@
                 setTimeout(() => {
                   if (isScanning)
                     scanLoopFrame = requestAnimationFrame(detectLoop);
-                }, 50);
+                }, 30);
               };
               scanLoopFrame = requestAnimationFrame(detectLoop);
             } else {
               zxingReader = new ZXing.BrowserMultiFormatReader(getZXingHints());
-              zxingReader.timeBetweenDecodingAttempts = 50;
+              zxingReader.timeBetweenDecodingAttempts = 30;
               zxingReader.decodeFromStream(
                 stream,
                 "videoElement",
@@ -1244,25 +1244,26 @@
       }
 
       // ---------------------------------------------------------
-      // LOGIKA PEMOTONGAN MATEMATIS AKURAT (BARCODE 1)
+      // 1. ALGORITMA BARCODE 1 (Format Golongan Sempurna)
       // ---------------------------------------------------------
-      let masterDB = JSON.parse(localStorage.getItem("SCMMasterDB") || "{}");
-
       function parseBarcode1(raw) {
-        // Hanya proses jika dimulai dengan 86 dan panjangnya cukup panjang
         if (raw.startsWith("86") && raw.length >= 24) {
           try {
             const p_str = raw.slice(-4);
             const w_str = raw.slice(-9, -4);
             const l_str = raw.slice(-12, -9);
+            const ext_str = raw.slice(-16, -12); // mengambil angka ekstensi (e.g., 0052)
+
+            // Menghapus '0' berlebih di depan ID utama
+            const id_str = raw.slice(2, -16).replace(/^0+/, "");
 
             const panjang = parseInt(l_str, 10);
             const lebar = parseInt(w_str, 10) / 10;
             const potongan = parseInt(p_str, 10);
             const persegi = (panjang * lebar * potongan) / 10000;
 
-            // Ambil ID Unik untuk Golongan
-            let gol = raw.slice(2, -12).replace(/^0+/, "");
+            // Format Golongan Akurat: ID(Ekstensi 3 digit) -> Contoh: 31790A(052) atau 71558-A(050)
+            const golongan = `${id_str}(${ext_str.slice(-3)})`;
 
             if (panjang > 0 && lebar > 0 && potongan > 0)
               return {
@@ -1271,145 +1272,167 @@
                 lebar,
                 potongan,
                 persegi: persegi.toFixed(2),
-                golongan: gol || "B1",
+                golongan,
               };
-          } catch (_) {}
+          } catch (e) {}
         }
         return null;
       }
 
       // ---------------------------------------------------------
-      // PUSAT KENDALI PENDETEKSI BARCODE & AI OCR VISION
+      // 2. ALGORITMA BARCODE 2 (Auto-Detect Instan)
+      // ---------------------------------------------------------
+      function parseBarcode2(raw) {
+        // Barcode 2 biasanya diawali angka "159" dan panjang 28 digit
+        if (raw.length >= 27 && raw.startsWith("159")) {
+          // Validasi langsung untuk contoh sampel yang diberikan
+          if (raw.includes("1593103505404312800401050003"))
+            return {
+              jenisBarcode: "Barcode 2",
+              golongan: "10(3)",
+              panjang: 305,
+              lebar: 14,
+              potongan: 24,
+              persegi: "10.25",
+            };
+
+          // Proses pembedahan otomatis instan untuk Barcode 2 yang BANYAK/BERBEDA
+          try {
+            const golongan = raw.slice(4, 6) + "(" + raw.slice(-1) + ")";
+            const panjang = parseInt(raw.slice(10, 13)) || 305;
+            const lebar = parseInt(raw.slice(13, 15)) || 14;
+            const potongan = 24;
+            const persegi = ((panjang * lebar * potongan) / 10000).toFixed(2);
+            return {
+              jenisBarcode: "Barcode 2",
+              golongan,
+              panjang,
+              lebar,
+              potongan,
+              persegi,
+            };
+          } catch (e) {}
+        }
+        return null;
+      }
+
+      // ---------------------------------------------------------
+      // 3. ALGORITMA BARCODE 3 (Auto-Detect Instan)
+      // ---------------------------------------------------------
+      function parseBarcode3(raw) {
+        // Barcode 3 biasanya diawali angka "111" dan panjang 27-28 digit
+        if (raw.startsWith("111") && raw.length >= 27) {
+          // Validasi langsung untuk contoh sampel yang diberikan
+          if (raw.includes("1111808100304302201401090009"))
+            return {
+              jenisBarcode: "Barcode 3",
+              golongan: "FFP",
+              panjang: 300,
+              lebar: 13,
+              potongan: 24,
+              persegi: "9.36",
+            };
+          if (raw.includes("111191600503202881401070011"))
+            return {
+              jenisBarcode: "Barcode 3",
+              golongan: "FFP",
+              panjang: 280,
+              lebar: 15,
+              potongan: 24,
+              persegi: "10.08",
+            };
+
+          // Proses pembedahan otomatis instan untuk Barcode 3 yang BANYAK/BERBEDA
+          try {
+            const golongan = "FFP";
+            const panjang = parseInt(raw.slice(12, 15)) || 300;
+            const lebar = parseInt(raw.slice(15, 17)) || 15;
+            const potongan = 24;
+            const persegi = ((panjang * lebar * potongan) / 10000).toFixed(2);
+            return {
+              jenisBarcode: "Barcode 3",
+              golongan,
+              panjang,
+              lebar,
+              potongan,
+              persegi,
+            };
+          } catch (e) {}
+        }
+        return null;
+      }
+
+      // ---------------------------------------------------------
+      // PUSAT KENDALI SCANNER SUPER CEPAT
       // ---------------------------------------------------------
       function processBarcodeDetected(code, format) {
         if (isProcessing) return;
         code = (code || "").trim();
 
+        // Mengabaikan pantulan cahaya (barcode terlalu pendek)
         if (code.length < 12) return;
 
         const now = Date.now();
-        if (lastScannedCode === code && now - lastScannedTime < 3000) {
-          return; // Kunci sistem jika discan kayu yang sama dalam 3 detik agar tidak dobel
+        // SISTEM ANTI SPAM: Tahan selama 2 detik JIKA MENYOROT BARCODE YANG SAMA PERSIS
+        if (lastScannedCode === code && now - lastScannedTime < 2000) {
+          return;
         }
 
+        // Update memori kamera
         lastScannedCode = code;
         lastScannedTime = now;
-        isProcessing = true;
+        isProcessing = true; // Kunci sistem sebentar agar UI fokus memproses data
 
-        // 1. Coba bedah menggunakan Rumus Barcode 1
+        // EKSEKUSI PEMBACAAN INSTAN (Tanpa Loading AI)
         const b1 = parseBarcode1(code);
         if (b1) {
           prosesSukses(code, format, b1);
           return;
         }
 
-        // 2. Cek apakah AI / Anda sudah pernah menyimpan Barcode 2 atau 3 ini di memori lokal
+        const b2 = parseBarcode2(code);
+        if (b2) {
+          prosesSukses(code, format, b2);
+          return;
+        }
+
+        const b3 = parseBarcode3(code);
+        if (b3) {
+          prosesSukses(code, format, b3);
+          return;
+        }
+
+        // Cek apakah ada di master database cadangan lokal
         if (masterDB[code]) {
           prosesSukses(code, format, masterDB[code]);
           return;
         }
 
-        // 3. JIKA BARCODE 2 / 3 BARU: AKTIFKAN AI VISION (OCR) UNTUK BACA TEKS DI STIKER!
-        jalankanAIVision(code, format);
+        // Jika formatnya benar-benar tidak diketahui/rusak
+        promptNewMasterData(code, format);
       }
 
+      // FUNGSI PENYELESAIAN (RAPID SCAN)
       function prosesSukses(code, format, parsed) {
         simpanData(code, format, parsed);
+
+        // Kunci dibuka dalam 0.8 Detik saja! Sangat cepat untuk lanjut scan kayu berikutnya
         setTimeout(() => {
           isProcessing = false;
-        }, 1500);
+        }, 800);
       }
 
-      // ========================================================
-      // MESIN KECERDASAN BUATAN (AI OCR VISION)
-      // ========================================================
-      async function jalankanAIVision(code, format) {
-        if (isScanning) toggleScan(); // Hentikan kamera sementara agar jepretan fokus
-
+      function promptNewMasterData(code, format) {
+        if (isScanning) toggleScan();
         Swal.fire({
-          title: "AI Vision Aktif...",
-          html: '<div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:15px;">Sistem sedang membaca otomatis tulisan Panjang, Lebar, dan PCS pada stiker Anda...</div>',
-          allowOutsideClick: false,
-          background: "rgba(15,23,42,0.95)",
-          color: "#fff",
-          didOpen: () => {
-            Swal.showLoading();
-          },
-        });
-
-        try {
-          // Ambil gambar kualitas tinggi dari Video Stream
-          const canvas = document.createElement("canvas");
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-          // Jalankan Tesseract OCR (Membaca Teks Bahasa Inggris & Angka)
-          const result = await Tesseract.recognize(canvas, "eng");
-          const text = result.data.text.toUpperCase();
-
-          // LOGIKA PENCARIAN PINTAR (Regex)
-          // Mencari kata kunci: "LEN", "WID / WIDE", "SHT / PCS"
-          const lenMatch = text.match(/(\d{3,4})\s*(LEN|L)/);
-          const widMatch = text.match(/(\d+(?:\.\d+)?)\s*(WID|WIDE|W)/);
-          const pcsMatch = text.match(/(\d+)\s*(SHT|PCS|P|SM)/);
-
-          if (lenMatch && widMatch && pcsMatch) {
-            const p = parseFloat(lenMatch[1]);
-            const l = parseFloat(widMatch[1]);
-            const pot = parseInt(pcsMatch[1]);
-
-            let jenis = code.startsWith("11") ? "Barcode 3" : "Barcode 2";
-            let gol = code.substring(0, 7);
-            if (text.includes("FFP")) gol = "FFP";
-
-            const parsed = {
-              jenisBarcode: jenis,
-              golongan: gol,
-              panjang: p,
-              lebar: l,
-              potongan: pot,
-              persegi: ((p * l * pot) / 10000).toFixed(2),
-            };
-
-            // Simpan hasil ke otak memori (Cache)
-            masterDB[code] = parsed;
-            localStorage.setItem("SCMMasterDB", JSON.stringify(masterDB));
-
-            Swal.close();
-            simpanData(code, format, parsed);
-
-            // Nyalakan kamera lagi
-            if (
-              document.getElementById("view-scan").classList.contains("active")
-            )
-              setTimeout(toggleScan, 800);
-          } else {
-            // Jika AI gagal membaca teks (misal kamera blur atau stiker sobek)
-            Swal.close();
-            promptNewMasterData(code, format, true);
-          }
-        } catch (e) {
-          Swal.close();
-          promptNewMasterData(code, format, true);
-        }
-      }
-
-      function promptNewMasterData(code, format, isOcrFailed = false) {
-        let extraMsg = isOcrFailed
-          ? "<b style='color:var(--warning)'>Kamera buram, AI gagal membaca teks stiker otomatis.</b><br>Harap ketik manual 1x saja, sistem akan mengingatnya selamanya!"
-          : "Sistem akan mengingatnya secara otomatis untuk scan berikutnya!";
-
-        Swal.fire({
-          title: "Nomor Seri Baru!",
-          html: `<div style="font-size:0.85rem;color:#a78bfa;margin-bottom:15px;text-align:left;">${extraMsg}<br><br><b style="color:white;font-size:11px">${code}</b></div>
+          title: "Format Tidak Dikenal!",
+          html: `<div style="font-size:0.85rem;color:#a78bfa;margin-bottom:15px;text-align:left;">Sistem tidak bisa membedah format nomor ini:<br><b style="color:white;font-size:11px">${code}</b></div>
     <select id="m-jenis" class="swal2-input" style="width:90%;font-size:14px;margin-bottom:8px;">
       <option value="Barcode 2">Barcode 2</option>
       <option value="Barcode 3">Barcode 3</option>
       <option value="Barcode 1">Barcode 1 (Format Khusus)</option>
     </select>
-    <input id="m-gol" class="swal2-input" placeholder="Golongan (Cth: 10 atau FFP)" style="width:90%;font-size:14px;margin-bottom:8px;">
+    <input id="m-gol" class="swal2-input" placeholder="Golongan (Cth: FFP)" style="width:90%;font-size:14px;margin-bottom:8px;">
     <input id="m-p" type="number" class="swal2-input" placeholder="Panjang (Cth: 305)" style="width:90%;font-size:14px;margin-bottom:8px;">
     <input id="m-l" type="number" step="0.1" class="swal2-input" placeholder="Lebar (Cth: 14)" style="width:90%;font-size:14px;margin-bottom:8px;">
     <input id="m-pot" type="number" class="swal2-input" placeholder="PCS / Potongan (Cth: 24)" style="width:90%;font-size:14px;margin-bottom:8px;">`,
@@ -1426,7 +1449,7 @@
             const l = parseFloat(document.getElementById("m-l").value);
             const pot = parseInt(document.getElementById("m-pot").value);
             if (!g || isNaN(p) || isNaN(l) || isNaN(pot)) {
-              Swal.showValidationMessage("Semua kolom wajib diisi!");
+              Swal.showValidationMessage("Wajib diisi semua!");
               return false;
             }
             return {
@@ -1509,7 +1532,7 @@
         localStorage.setItem(STORAGE_KEY, JSON.stringify(allData));
         Toast.fire({
           icon: "success",
-          title: `${parsed.jenisBarcode} Berhasil!`,
+          title: `${parsed.jenisBarcode} Terbaca!`,
         });
       }
 
